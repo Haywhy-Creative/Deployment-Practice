@@ -435,7 +435,19 @@ def get_dashboard_users(current_user):
             'has_next': pagination.has_next,
             'has_prev': pagination.has_prev
         }
-    }), 200
+    }), 
+
+@app.errorhandler(500)
+def handle_500_error(e):
+    response = jsonify({
+        "status": "error",
+        "message": "An internal server error occurred.",
+        "details": str(e)
+    })
+    # Manually ensure CORS header is present on 500 errors
+    response.headers.add("Access-Control-Allow-Origin", "https://auth-frontend-ibum.onrender.com")
+    response.headers.add("Access-Control-Allow-Credentials", "true")
+    return response, 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
