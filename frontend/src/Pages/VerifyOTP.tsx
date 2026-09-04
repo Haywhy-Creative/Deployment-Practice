@@ -1,5 +1,6 @@
 import React, { useState, useEffect, type ChangeEvent, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { API_BASE_URL } from '../api';
 
 export const VerifyOTP: React.FC = () => {
   const navigate = useNavigate();
@@ -24,7 +25,8 @@ export const VerifyOTP: React.FC = () => {
     setLoading(true);
 
     try {
-      const response = await fetch('/api/auth/verify-registration', {
+      // ✅ Using API_BASE_URL
+      const response = await fetch(`${API_BASE_URL}/api/auth/verify-registration`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

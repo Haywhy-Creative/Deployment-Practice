@@ -59,6 +59,17 @@ const refreshAccessToken = async (): Promise<string | null> => {
 };
 
 /**
+ * Normalizes full URLs vs relative endpoint paths to prevent duplicate domain prefixes.
+ */
+const resolveUrl = (urlOrEndpoint: string): string => {
+  if (urlOrEndpoint.startsWith('http://') || urlOrEndpoint.startsWith('https://')) {
+    return urlOrEndpoint;
+  }
+  const endpoint = urlOrEndpoint.startsWith('/') ? urlOrEndpoint : `/${urlOrEndpoint}`;
+  return `${API_BASE_URL}${endpoint}`;
+};
+
+/**
  * Core fetch wrapper with Bearer token injection, auto-refresh on 401, and automatic retries.
  */
 export const fetchWithAuth = async (
@@ -77,8 +88,10 @@ export const fetchWithAuth = async (
     headers.set('Content-Type', 'application/json');
   }
 
+  const fullUrl = resolveUrl(url);
+
   // Initial Request
-  let response = await fetch(url, { ...options, headers });
+  let response = await fetch(fullUrl, { ...options, headers });
 
   // Handle Token Expiration (401 Unauthorized)
   if (response.status === 401) {
@@ -86,7 +99,7 @@ export const fetchWithAuth = async (
 
     if (newAccessToken) {
       headers.set('Authorization', `Bearer ${newAccessToken}`);
-      response = await fetch(url, { ...options, headers });
+      response = await fetch(fullUrl, { ...options, headers });
     }
   }
 
@@ -98,19 +111,36 @@ export const fetchWithAuth = async (
  */
 export const api = {
   get: async <T = any>(endpoint: string): Promise<T> => {
-    const response = await fetchWithAuth(`${API_BASE_URL}${endpoint}`, { method: 'GET' });
+    const response = await fetchWithAuth(endpoint, { method: 'GET' });
     const data = await safeParseJson<T>(response);
     if (!response.ok) throw new Error((data as any).message || 'GET request failed');
     return data;
   },
 
   post: async <T = any>(endpoint: string, body?: any): Promise<T> => {
-    const response = await fetchWithAuth(`${API_BASE_URL}${endpoint}`, {
+    const response = await fetchWithAuth(endpoint, {
       method: 'POST',
       body: body ? JSON.stringify(body) : undefined,
     });
     const data = await safeParseJson<T>(response);
     if (!response.ok) throw new Error((data as any).message || 'POST request failed');
+    return data;
+  },
+
+  put: async <T = any>(endpoint: string, body?: any): Promise<T> => {
+    const response = await fetchWithAuth(endpoint, {
+      method: 'PUT',
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await safeParseJson<T>(response);
+    if (!response.ok) throw new Error((data as any).message || 'PUT request failed');
+    return data;
+  },
+
+  delete: async <T = any>(endpoint: string): Promise<T> => {
+    const response = await fetchWithAuth(endpoint, { method: 'DELETE' });
+    const data = await safeParseJson<T>(response);
+    if (!response.ok) throw new Error((data as any).message || 'DELETE request failed');
     return data;
   },
 };

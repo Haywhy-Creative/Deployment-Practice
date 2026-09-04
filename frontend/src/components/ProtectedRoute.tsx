@@ -1,45 +1,50 @@
 import React from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
+import { useAuth } from '../AuthContext';
 
 interface ProtectedRouteProps {
   redirectPath?: string;
+  children?: React.ReactNode;
 }
-
-// Helper to check if a JWT token is expired on the client side
-const isTokenExpired = (token: string): boolean => {
-  try {
-    const payloadBase64 = token.split('.')[1];
-    if (!payloadBase64) return true;
-    const decodedPayload = JSON.parse(atob(payloadBase64));
-    
-    // exp is in seconds, Date.now() is in milliseconds
-    if (decodedPayload.exp && decodedPayload.exp * 1000 < Date.now()) {
-      return true;
-    }
-    return false;
-  } catch (e) {
-    return true; // Treat invalid tokens as expired/unauthenticated
-  }
-};
 
 export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   redirectPath = '/login',
+  children,
 }) => {
-  const token = localStorage.getItem('accessToken');
+  const { isAuthenticated, isLoading } = useAuth();
   const location = useLocation();
 
-  // 1️⃣ Verify token exists and is not expired locally
-  if (!token || isTokenExpired(token)) {
-    // Clear potentially expired tokens
-    localStorage.removeItem('accessToken');
-    localStorage.removeItem('refreshToken');
+  // 1. Show loading screen while AuthContext initializes on app load/refresh
+  if (isLoading) {
+    return (
+      <div style={styles.loadingContainer}>
+        <p style={styles.loadingText}>Verifying session...</p>
+      </div>
+    );
+  }
 
-    // Redirect to login while saving the current location for post-login redirect
+  // 2. Redirect unauthenticated users and preserve intended location
+  if (!isAuthenticated) {
     return <Navigate to={redirectPath} state={{ from: location }} replace />;
   }
 
-  // 2️⃣ Render child routes defined inside <Route element={<ProtectedRoute />}>
-  return <Outlet />;
+  // 3. Render children or nested routes via Outlet
+  return children ? <>{children}</> : <Outlet />;
+};
+
+const styles: { [key: string]: React.CSSProperties } = {
+  loadingContainer: {
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'center',
+    minHeight: '100vh',
+    backgroundColor: '#f4f6f8',
+  },
+  loadingText: {
+    fontSize: '16px',
+    color: '#4a5568',
+    fontWeight: 500,
+  },
 };
 
 export default ProtectedRoute;

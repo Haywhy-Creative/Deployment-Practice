@@ -1,7 +1,6 @@
 import React, { useState, type ChangeEvent, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:5000';
+import { API_BASE_URL } from '../api';
 
 interface RegisterFormData {
   username: string;
@@ -46,7 +45,8 @@ export const Register: React.FC = () => {
     setLoading(true);
 
     try {
-      const response = await fetch('/api/auth/register', {
+      // ✅ Using imported API_BASE_URL instead of relative path
+      const response = await fetch(`${API_BASE_URL}/api/auth/register`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -146,7 +146,7 @@ export const Register: React.FC = () => {
           {loading ? 'Creating Account...' : 'Register'}
         </button>
 
-        {/* Added Navigation Link */}
+        {/* Navigation Link */}
         <p style={styles.footerText}>
           Already have an account?{' '}
           <Link to="/login" style={styles.link}>

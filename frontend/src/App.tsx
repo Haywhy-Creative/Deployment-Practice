@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate, Link, useLocation } from 'react-router-dom';
+import React from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate, Link } from 'react-router-dom';
+import { AuthProvider, useAuth } from './AuthContext';
 
 import Login from './Pages/Login';
 import Register from './Pages/register';
@@ -9,34 +10,21 @@ import ForgotPassword from './Pages/ForgotPassword';
 
 import ProtectedRoute from './components/ProtectedRoute';
 
-// Header component to react to route changes and update token state dynamically
+// Header component using global AuthContext for instant state updates
 const NavigationBar: React.FC = () => {
-  const [token, setToken] = useState<string | null>(localStorage.getItem('accessToken'));
-  const location = useLocation();
-
-  // Re-check token status whenever location changes
-  useEffect(() => {
-    setToken(localStorage.getItem('accessToken'));
-  }, [location]);
-
-  const handleLogout = () => {
-    localStorage.removeItem('accessToken');
-    localStorage.removeItem('refreshToken');
-    localStorage.removeItem('pendingVerificationEmail');
-    window.location.href = '/login';
-  };
+  const { isAuthenticated, logout } = useAuth();
 
   return (
     <header style={styles.navHeader}>
       <nav style={styles.navContainer}>
         <span style={styles.brand}>AuthApp</span>
         <div style={styles.linkGroup}>
-          {token ? (
+          {isAuthenticated ? (
             <>
               <Link to="/dashboard" style={styles.link}>
                 Dashboard
               </Link>
-              <button onClick={handleLogout} style={styles.logoutBtn}>
+              <button onClick={logout} style={styles.logoutBtn}>
                 Logout
               </button>
             </>
@@ -58,28 +46,30 @@ const NavigationBar: React.FC = () => {
 
 export const App: React.FC = () => {
   return (
-    <Router>
-      <NavigationBar />
+    <AuthProvider>
+      <Router>
+        <NavigationBar />
 
-      <main>
-        <Routes>
-          {/* Public Routes */}
-          <Route path="/login" element={<Login />} />
-          <Route path="/register" element={<Register />} />
-          <Route path="/verify-otp" element={<VerifyOTP />} />
-          <Route path="/forgot-password" element={<ForgotPassword />} />
+        <main>
+          <Routes>
+            {/* Public Routes */}
+            <Route path="/login" element={<Login />} />
+            <Route path="/register" element={<Register />} />
+            <Route path="/verify-otp" element={<VerifyOTP />} />
+            <Route path="/forgot-password" element={<ForgotPassword />} />
 
-          {/* Protected Routes */}
-          <Route element={<ProtectedRoute />}>
-            <Route path="/dashboard" element={<Dashboard />} />
-          </Route>
+            {/* Protected Routes */}
+            <Route element={<ProtectedRoute />}>
+              <Route path="/dashboard" element={<Dashboard />} />
+            </Route>
 
-          {/* Root & Catch-all Redirects */}
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
-          <Route path="*" element={<Navigate to="/login" replace />} />
-        </Routes>
-      </main>
-    </Router>
+            {/* Root & Catch-all Redirects */}
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="*" element={<Navigate to="/login" replace />} />
+          </Routes>
+        </main>
+      </Router>
+    </AuthProvider>
   );
 };
 

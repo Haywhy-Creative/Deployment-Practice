@@ -1,5 +1,6 @@
 import React, { useState, useEffect, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { API_BASE_URL } from '../api';
 
 export const ForgotPassword: React.FC = () => {
   const navigate = useNavigate();
@@ -17,7 +18,7 @@ export const ForgotPassword: React.FC = () => {
 
   // Live Timer Countdown Effect
   useEffect(() => {
-   let timer: ReturnType<typeof setInterval>;
+    let timer: ReturnType<typeof setInterval>;
     if (step === 2 && timeLeft > 0) {
       timer = setInterval(() => {
         setTimeLeft((prev) => prev - 1);
@@ -43,7 +44,8 @@ export const ForgotPassword: React.FC = () => {
     setLoading(true);
 
     try {
-      const response = await fetch('/api/auth/forgot-password', {
+      // ✅ Using API_BASE_URL
+      const response = await fetch(`${API_BASE_URL}/api/auth/forgot-password`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email }),
@@ -89,7 +91,8 @@ export const ForgotPassword: React.FC = () => {
     setLoading(true);
 
     try {
-      const response = await fetch('/api/auth/reset-password', {
+      // ✅ Using API_BASE_URL
+      const response = await fetch(`${API_BASE_URL}/api/auth/reset-password`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, otp, new_password: newPassword }),

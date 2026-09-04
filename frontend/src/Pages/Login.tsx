@@ -1,5 +1,6 @@
 import React, { useState, type ChangeEvent, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { API_BASE_URL } from '../api'; // ✅ Steps up out of pages/ into src/ to find api.ts
 
 interface LoginFormData {
   email: string;
@@ -29,7 +30,7 @@ export const Login: React.FC = () => {
     const { email, password } = formData;
 
     try {
-      const res = await fetch('/api/auth/login', {
+      const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
