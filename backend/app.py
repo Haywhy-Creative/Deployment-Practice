@@ -38,8 +38,9 @@ ma.init_app(app)
 
 # --- Flask-Mail Setup ---
 app.config['MAIL_SERVER'] = os.getenv('MAIL_SERVER', 'smtp.gmail.com')
-app.config['MAIL_PORT'] = int(os.getenv('MAIL_PORT', 587))
-app.config['MAIL_USE_TLS'] = os.getenv('MAIL_USE_TLS', 'True').lower() in ['true', '1', 't']
+app.config['MAIL_PORT'] = int(os.getenv('MAIL_PORT', 465))
+app.config['MAIL_USE_TLS'] = os.getenv('MAIL_USE_TLS', 'False').lower() in ['true', '1', 't']
+app.config['MAIL_USE_SSL'] = os.getenv('MAIL_USE_SSL', 'True').lower() in ['true', '1', 't']
 app.config['MAIL_USERNAME'] = os.getenv('MAIL_USERNAME')
 app.config['MAIL_PASSWORD'] = os.getenv('MAIL_PASSWORD')
 app.config['MAIL_DEFAULT_SENDER'] = os.getenv('MAIL_USERNAME')
@@ -94,36 +95,50 @@ with app.app_context():
 def generate_otp():
     return ''.join(random.choices(string.digits, k=6))
 
+def make_cors_response(data, status_code=200):
+    """Helper to attach explicit CORS headers to error handlers"""
+    response = jsonify(data)
+    origin = request.headers.get('Origin')
+    allowed_origins = [
+        "http://localhost:5174",
+        "http://localhost:5173",
+        "http://127.0.0.1:5174",
+        "http://127.0.0.1:5173",
+        "https://auth-frontend-ibum.onrender.com",
+    ]
+    if origin in allowed_origins:
+        response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+    return response, status_code
+
 
 # =====================================================================
-# 🛡️ GLOBAL ERROR HANDLERS (Forces JSON output everywhere)
+# 🛡️ GLOBAL ERROR HANDLERS (Guarantees CORS + JSON output)
 # =====================================================================
 
-# 1. Intercept Marshmallow validation failures automatically
 @app.errorhandler(ValidationError)
 def handle_marshmallow_validation_error(err):
-    return jsonify({
+    return make_cors_response({
         'status': 'error',
         'message': 'Validation failed',
         'errors': err.messages
-    }), 400
+    }, 400)
 
-# 2. Intercept generic HTTP Exceptions (404, 405, etc.) and return strictly JSON
 @app.errorhandler(HTTPException)
 def handle_http_exception(e):
-    return jsonify({
+    return make_cors_response({
         'status': 'error',
         'message': e.description
-    }), e.code
+    }, e.code)
 
-# 3. Intercept uncaught internal server errors (500)
 @app.errorhandler(Exception)
 def handle_unexpected_error(e):
     app.logger.error(f"Unhandled Exception: {str(e)}")
-    return jsonify({
+    return make_cors_response({
         'status': 'error',
-        'message': 'An internal server error occurred.'
-    }), 500
+        'message': 'An internal server error occurred.',
+        'details': str(e)
+    }, 500)
 
 
 # =====================================================================
@@ -172,7 +187,6 @@ def token_required(f):
 # 🚀 API ROUTES
 # =====================================================================
 
-# 0️⃣ Health Check & Root Routes (Prevents 404 on direct URL navigation)
 @app.route('/', methods=['GET'])
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -182,14 +196,14 @@ def health_check():
     }), 200
 
 
-# import datetime
-from flask import request, jsonify
-from flask_mail import Message
-
 # 1️⃣ Register Route
 @app.route('/api/auth/register', methods=['POST'])
 def register():
-    data = register_schema.load(request.get_json())
+    payload = request.get_json()
+    if not payload:
+        return jsonify({'message': 'Missing JSON request body'}), 400
+
+    data = register_schema.load(payload)
 
     if User.query.filter((User.email == data['email']) | (User.username == data['username'])).first():
         return jsonify({'message': 'User with this email or username already exists'}), 409
@@ -206,7 +220,6 @@ def register():
     )
     new_user.set_password(data['password'])
 
-    # Step A: Save user to DB first
     try:
         db.session.add(new_user)
         db.session.commit()
@@ -214,7 +227,6 @@ def register():
         db.session.rollback()
         return jsonify({'message': 'Error saving user to database', 'error': str(e)}), 500
 
-    # Step B: Attempt to send email without rolling back the saved user on failure
     email_sent = False
     try:
         msg = Message("Verify Your Account Registration", recipients=[new_user.email])
@@ -223,7 +235,6 @@ def register():
         email_sent = True
         print(f"SUCCESS: Email delivered to {new_user.email}")
     except Exception as e:
-        # Fallback: Print OTP clearly to Render Logs if email fails
         print("\n" + "="*50)
         print("--- RENDER MAIL DELIVERY FAILED (FALLBACK) ---")
         print(f"User Email : {new_user.email}")
@@ -240,7 +251,11 @@ def register():
 # 2️⃣ Verify Registration OTP Route
 @app.route('/api/auth/verify-registration', methods=['POST'])
 def verify_registration():
-    data = verify_registration_schema.load(request.get_json())
+    payload = request.get_json()
+    if not payload:
+        return jsonify({'message': 'Missing JSON request body'}), 400
+
+    data = verify_registration_schema.load(payload)
     email = data['email']
     otp_input = data['otp']
 
@@ -254,7 +269,7 @@ def verify_registration():
 
     now = datetime.datetime.now(datetime.timezone.utc)
     
-    # Ensure timezone handling matches user.otp_expiry from DB
+    # Safe timezone conversion for DB datetimes
     expiry = user.otp_expiry
     if expiry and expiry.tzinfo is None:
         expiry = expiry.replace(tzinfo=datetime.timezone.utc)
@@ -267,7 +282,9 @@ def verify_registration():
     user.otp_expiry = None
     db.session.commit()
 
-    return jsonify({'message': 'Email verified successfully'}), 200
+    return jsonify({'message': 'Email verified successfully! You can now login.'}), 200
+
+
 # 3️⃣ Login Route
 @app.route('/api/auth/login', methods=['POST'])
 def login():
@@ -320,7 +337,11 @@ def login():
 # 4️⃣ Request Password Reset OTP Route
 @app.route('/api/auth/forgot-password', methods=['POST'])
 def forgot_password():
-    data = forgot_password_schema.load(request.get_json())
+    payload = request.get_json()
+    if not payload:
+        return jsonify({'message': 'Missing JSON request body'}), 400
+
+    data = forgot_password_schema.load(payload)
     email = data['email']
 
     user = User.query.filter_by(email=email).first()
@@ -337,9 +358,14 @@ def forgot_password():
         msg = Message("Password Reset Verification Code", recipients=[user.email])
         msg.body = f"You requested a password reset. Use this code to update your password: {otp}"
         mail.send(msg)
+        print(f"SUCCESS: Reset OTP delivered to {user.email}")
     except Exception as e:
-        print(f"\n--- MAIL SENDING FAILED: {e} ---\n")
-        return jsonify({'message': 'Error sending mail', 'error': str(e)}), 500
+        print("\n" + "="*50)
+        print("--- RENDER MAIL DELIVERY FAILED (FORGOT PASSWORD) ---")
+        print(f"User Email : {user.email}")
+        print(f"YOUR OTP   : {otp}")
+        print(f"SMTP Error : {e}")
+        print("="*50 + "\n")
 
     return jsonify({'message': 'If this email exists, an OTP has been sent.'}), 200
 
@@ -347,7 +373,11 @@ def forgot_password():
 # 5️⃣ Reset Password Route
 @app.route('/api/auth/reset-password', methods=['POST'])
 def reset_password():
-    data = reset_password_schema.load(request.get_json())
+    payload = request.get_json()
+    if not payload:
+        return jsonify({'message': 'Missing JSON request body'}), 400
+
+    data = reset_password_schema.load(payload)
     email = data['email']
     otp_input = data['otp']
     new_password = data['new_password']
@@ -358,7 +388,11 @@ def reset_password():
         return jsonify({'message': 'Invalid details'}), 400
 
     now = datetime.datetime.now(datetime.timezone.utc)
-    if user.otp != otp_input or (user.otp_expiry and user.otp_expiry.replace(tzinfo=datetime.timezone.utc) < now):
+    expiry = user.otp_expiry
+    if expiry and expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=datetime.timezone.utc)
+
+    if user.otp != otp_input or (expiry and expiry < now):
         return jsonify({'message': 'Incorrect or expired OTP code'}), 400
 
     user.set_password(new_password)
@@ -459,19 +493,8 @@ def get_dashboard_users(current_user):
             'has_next': pagination.has_next,
             'has_prev': pagination.has_prev
         }
-    }), 
+    }), 200
 
-@app.errorhandler(500)
-def handle_500_error(e):
-    response = jsonify({
-        "status": "error",
-        "message": "An internal server error occurred.",
-        "details": str(e)
-    })
-    # Manually ensure CORS header is present on 500 errors
-    response.headers.add("Access-Control-Allow-Origin", "https://auth-frontend-ibum.onrender.com")
-    response.headers.add("Access-Control-Allow-Credentials", "true")
-    return response, 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
