@@ -182,6 +182,10 @@ def health_check():
     }), 200
 
 
+# import datetime
+from flask import request, jsonify
+from flask_mail import Message
+
 # 1️⃣ Register Route
 @app.route('/api/auth/register', methods=['POST'])
 def register():
@@ -202,19 +206,35 @@ def register():
     )
     new_user.set_password(data['password'])
 
+    # Step A: Save user to DB first
     try:
         db.session.add(new_user)
         db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'message': 'Error saving user to database', 'error': str(e)}), 500
 
+    # Step B: Attempt to send email without rolling back the saved user on failure
+    email_sent = False
+    try:
         msg = Message("Verify Your Account Registration", recipients=[new_user.email])
         msg.body = f"Your account is being created. Use this code to complete your registration: {otp}"
         mail.send(msg)
-
-        return jsonify({'message': 'User registered. Please check your email for the verification code.'}), 201
-
+        email_sent = True
+        print(f"SUCCESS: Email delivered to {new_user.email}")
     except Exception as e:
-        db.session.rollback()
-        return jsonify({'message': 'Error creating user or sending mail', 'error': str(e)}), 500
+        # Fallback: Print OTP clearly to Render Logs if email fails
+        print("\n" + "="*50)
+        print("--- RENDER MAIL DELIVERY FAILED (FALLBACK) ---")
+        print(f"User Email : {new_user.email}")
+        print(f"YOUR OTP   : {otp}")
+        print(f"SMTP Error : {e}")
+        print("="*50 + "\n")
+
+    return jsonify({
+        'message': 'User registered. Please check your email or server logs for the verification code.',
+        'email_sent': email_sent
+    }), 201
 
 
 # 2️⃣ Verify Registration OTP Route
@@ -233,7 +253,13 @@ def verify_registration():
         return jsonify({'message': 'Account is already verified'}), 400
 
     now = datetime.datetime.now(datetime.timezone.utc)
-    if user.otp != otp_input or (user.otp_expiry and user.otp_expiry.replace(tzinfo=datetime.timezone.utc) < now):
+    
+    # Ensure timezone handling matches user.otp_expiry from DB
+    expiry = user.otp_expiry
+    if expiry and expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=datetime.timezone.utc)
+
+    if user.otp != otp_input or (expiry and expiry < now):
         return jsonify({'message': 'Incorrect or expired OTP code'}), 400
 
     user.is_verified = True
@@ -241,9 +267,7 @@ def verify_registration():
     user.otp_expiry = None
     db.session.commit()
 
-    return jsonify({'message': 'Email verified successfully! You can now login.'}), 200
-
-
+    return jsonify({'message': 'Email verified successfully'}), 200
 # 3️⃣ Login Route
 @app.route('/api/auth/login', methods=['POST'])
 def login():
