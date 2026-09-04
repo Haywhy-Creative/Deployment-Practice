@@ -46,7 +46,7 @@ app.config['MAIL_DEFAULT_SENDER'] = os.getenv('MAIL_USERNAME')
 
 mail = Mail(app)
 
-# CORS Setup
+# --- CORS Setup ---
 CORS(
     app,
     resources={
@@ -62,7 +62,9 @@ CORS(
             "allow_headers": ["Content-Type", "Authorization"],
         }
     },
+    supports_credentials=True
 )
+
 db = SQLAlchemy(app)
 
 # Database Model
@@ -94,7 +96,7 @@ def generate_otp():
 
 
 # =====================================================================
-# 🛡️ GLOBAL ERROR HANDLERS (Best Practice)
+# 🛡️ GLOBAL ERROR HANDLERS (Forces JSON output everywhere)
 # =====================================================================
 
 # 1. Intercept Marshmallow validation failures automatically
@@ -106,7 +108,7 @@ def handle_marshmallow_validation_error(err):
         'errors': err.messages
     }), 400
 
-# 2. Intercept generic HTTP Exceptions (404, 405, etc.)
+# 2. Intercept generic HTTP Exceptions (404, 405, etc.) and return strictly JSON
 @app.errorhandler(HTTPException)
 def handle_http_exception(e):
     return jsonify({
@@ -170,10 +172,19 @@ def token_required(f):
 # 🚀 API ROUTES
 # =====================================================================
 
+# 0️⃣ Health Check & Root Routes (Prevents 404 on direct URL navigation)
+@app.route('/', methods=['GET'])
+@app.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({
+        'status': 'success',
+        'message': 'Flask Authentication API is up and running!'
+    }), 200
+
+
 # 1️⃣ Register Route
 @app.route('/api/auth/register', methods=['POST'])
 def register():
-    # Schema validation (Raises ValidationError if payload is invalid)
     data = register_schema.load(request.get_json())
 
     if User.query.filter((User.email == data['email']) | (User.username == data['username'])).first():
@@ -236,7 +247,11 @@ def verify_registration():
 # 3️⃣ Login Route
 @app.route('/api/auth/login', methods=['POST'])
 def login():
-    data = login_schema.load(request.get_json())
+    payload = request.get_json()
+    if not payload:
+        return jsonify({'message': 'Missing JSON request body'}), 400
+
+    data = login_schema.load(payload)
 
     user = User.query.filter_by(email=data['email']).first()
 
@@ -287,7 +302,6 @@ def forgot_password():
     user = User.query.filter_by(email=email).first()
 
     if not user:
-        # Don't reveal user existence
         return jsonify({'message': 'If this email exists, an OTP has been sent.'}), 200
 
     otp = generate_otp()
@@ -381,7 +395,6 @@ def get_current_user_profile(current_user):
 @app.route('/api/dashboard/users', methods=['GET'])
 @token_required
 def get_dashboard_users(current_user):
-    # Marshmallow validates request.args (URL query parameters)
     args = dashboard_query_schema.load(request.args)
     
     page = args['page']
@@ -389,10 +402,8 @@ def get_dashboard_users(current_user):
     search_query = args['search'].strip()
     status_filter = args['status'].strip().lower()
 
-    # Base Query
     query = User.query
 
-    # 1. Multi-Column ILIKE Search (username or email)
     if search_query:
         query = query.filter(
             or_(
@@ -401,13 +412,11 @@ def get_dashboard_users(current_user):
             )
         )
 
-    # 2. Status Filtering
     if status_filter == 'verified':
         query = query.filter(User.is_verified == True)
     elif status_filter == 'unverified':
         query = query.filter(User.is_verified == False)
 
-    # 3. Order & Paginate
     query = query.order_by(User.id.desc())
     pagination = db.paginate(query, page=page, per_page=per_page, error_out=False)
 
