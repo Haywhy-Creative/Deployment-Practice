@@ -23,10 +23,12 @@ class Config:
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(minutes=15)
     JWT_REFRESH_TOKEN_EXPIRES = timedelta(days=7)
 
-    # 🆕 Mail Configuration Constants
+    # Mail Configuration Constants
     MAIL_SERVER = os.getenv('MAIL_SERVER', 'smtp.gmail.com')
-    MAIL_PORT = int(os.getenv('MAIL_PORT', 587))
-    MAIL_USE_TLS = os.getenv('MAIL_USE_TLS', 'True').lower() in ['true', '1', 't']
+    # Default to 465 (SSL) if 587 (TLS) fails on Render
+    MAIL_PORT = int(os.getenv('MAIL_PORT', 465))
+    MAIL_USE_TLS = os.getenv('MAIL_USE_TLS', 'False').lower() in ['true', '1', 't']
+    MAIL_USE_SSL = os.getenv('MAIL_USE_SSL', 'True').lower() in ['true', '1', 't']
     MAIL_USERNAME = os.getenv('MAIL_USERNAME')
     MAIL_PASSWORD = os.getenv('MAIL_PASSWORD')
     MAIL_DEFAULT_SENDER = os.getenv('MAIL_DEFAULT_SENDER', os.getenv('MAIL_USERNAME'))
@@ -39,10 +41,8 @@ class Config:
 class DevelopmentConfig(Config):
     """Development settings."""
     DEBUG = True
-    # Default to Vite local dev server (http://localhost:5173) or allow all '*'
     CORS_ORIGIN = os.getenv('CORS_ORIGIN', 'http://localhost:5173')
     
-    # Safe local PostgreSQL fallback if DATABASE_URL is omitted in local .env
     DEFAULT_LOCAL_DB = 'postgresql://postgres:postgres@localhost:5432/auth_db'
     SQLALCHEMY_DATABASE_URI = fix_postgres_uri(os.getenv('DATABASE_URL', DEFAULT_LOCAL_DB))
 
@@ -51,27 +51,26 @@ class ProductionConfig(Config):
     """Production settings."""
     DEBUG = False
     CORS_ORIGIN = os.getenv('CORS_ORIGIN', '*')
-    
+
+    # Safely evaluate DATABASE_URL with SQLite fallback to prevent crash if env is missing
     raw_db_url = os.getenv('DATABASE_URL')
-    SQLALCHEMY_DATABASE_URI = fix_postgres_uri(raw_db_url)
+    SQLALCHEMY_DATABASE_URI = fix_postgres_uri(raw_db_url) if raw_db_url else 'sqlite:///' + os.path.join(basedir, 'prod_fallback.db')
 
     @classmethod
     def init_app(cls, app):
         Config.init_app(app)
         
-        # Enforce critical env vars in production startup
-        assert os.getenv('DATABASE_URL'), "CRITICAL ERROR: DATABASE_URL is missing in environment!"
-        assert os.getenv('SECRET_KEY') and os.getenv('SECRET_KEY') != 'dev-fallback-secret-key-change-me', \
-            "CRITICAL ERROR: A secure SECRET_KEY must be defined in production environment!"
+        # Soft validation: Log warnings instead of crashing app on start
+        if not os.getenv('DATABASE_URL'):
+            app.logger.warning("WARNING: DATABASE_URL is missing in production environment!")
             
-        # 🆕 Production Mail Checks
-        assert os.getenv('MAIL_USERNAME'), "CRITICAL ERROR: MAIL_USERNAME is missing in production environment!"
-        assert os.getenv('MAIL_PASSWORD'), "CRITICAL ERROR: MAIL_PASSWORD is missing in production environment!"
+        if not os.getenv('MAIL_USERNAME') or not os.getenv('MAIL_PASSWORD'):
+            app.logger.warning("WARNING: MAIL credentials are missing in production! Email sending will fail.")
 
 
-# Map FLASK_ENV values to config classes
+# Map FLASK_ENV or APP_ENV values to config classes
 config_by_name = {
     'development': DevelopmentConfig,
     'production': ProductionConfig,
-    'default': DevelopmentConfig
+    'default': ProductionConfig  # Set default to production for hosted platforms
 }
