@@ -44,9 +44,15 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # Flask-Mail Configuration
 app.config['MAIL_SERVER'] = os.getenv('MAIL_SERVER', 'smtp.gmail.com')
+<<<<<<< HEAD
 app.config['MAIL_PORT'] = int(os.getenv('MAIL_PORT', 2525))
 app.config['MAIL_USE_TLS'] = os.getenv('MAIL_USE_TLS', 'True').lower() in ['true', '1', 't']
 app.config['MAIL_USE_SSL'] = os.getenv('MAIL_USE_SSL', 'False').lower() in ['true', '1', 't']
+=======
+app.config['MAIL_PORT'] = int(os.getenv('MAIL_PORT', 465))
+app.config['MAIL_USE_TLS'] = os.getenv('MAIL_USE_TLS', 'False').lower() in ['true', '1', 't']
+app.config['MAIL_USE_SSL'] = os.getenv('MAIL_USE_SSL', 'True').lower() in ['true', '1', 't']
+>>>>>>> a80b1a3d68dacfb6d7bffdb23a71f44fe414e690
 app.config['MAIL_USERNAME'] = os.getenv('MAIL_USERNAME')
 app.config['MAIL_PASSWORD'] = os.getenv('MAIL_PASSWORD')
 app.config['MAIL_DEFAULT_SENDER'] = os.getenv('MAIL_DEFAULT_SENDER') or os.getenv('MAIL_USERNAME')
@@ -108,25 +114,50 @@ with app.app_context():
 def generate_otp():
     return ''.join(random.choices(string.digits, k=6))
 
+<<<<<<< HEAD
 # Error Handlers
+=======
+def make_cors_response(data, status_code=200):
+    """Helper to attach explicit CORS headers to error handlers"""
+    response = jsonify(data)
+    origin = request.headers.get('Origin')
+    allowed_origins = [
+        "http://localhost:5174",
+        "http://localhost:5173",
+        "http://127.0.0.1:5174",
+        "http://127.0.0.1:5173",
+        "https://auth-frontend-ibum.onrender.com",
+    ]
+    if origin in allowed_origins:
+        response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+    return response, status_code
+
+
+# =====================================================================
+# 🛡️ GLOBAL ERROR HANDLERS (Guarantees CORS + JSON output)
+# =====================================================================
+
+>>>>>>> a80b1a3d68dacfb6d7bffdb23a71f44fe414e690
 @app.errorhandler(ValidationError)
 def handle_marshmallow_validation_error(err):
-    return jsonify({
+    return make_cors_response({
         'status': 'error',
         'message': 'Validation failed',
         'errors': err.messages
-    }), 400
+    }, 400)
 
 @app.errorhandler(HTTPException)
 def handle_http_exception(e):
-    return jsonify({
+    return make_cors_response({
         'status': 'error',
         'message': e.description
-    }), e.code
+    }, e.code)
 
 @app.errorhandler(Exception)
 def handle_unexpected_error(e):
     app.logger.error(f"Unhandled Exception: {str(e)}")
+<<<<<<< HEAD
     origin = request.headers.get('Origin')
     response = jsonify({
         'status': 'error',
@@ -137,6 +168,13 @@ def handle_unexpected_error(e):
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Credentials"] = "true"
     return response, 500
+=======
+    return make_cors_response({
+        'status': 'error',
+        'message': 'An internal server error occurred.',
+        'details': str(e)
+    }, 500)
+>>>>>>> a80b1a3d68dacfb6d7bffdb23a71f44fe414e690
 
 # Middleware
 def token_required(f):
@@ -173,7 +211,15 @@ def token_required(f):
         return f(current_user, *args, **kwargs)
     return decorated
 
+<<<<<<< HEAD
 # Routes
+=======
+
+# =====================================================================
+# 🚀 API ROUTES
+# =====================================================================
+
+>>>>>>> a80b1a3d68dacfb6d7bffdb23a71f44fe414e690
 @app.route('/', methods=['GET'])
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -184,10 +230,18 @@ def health_check():
 
 @app.route('/api/auth/register', methods=['POST'])
 def register():
+<<<<<<< HEAD
     try:
         data = register_schema.load(request.get_json())
     except Exception as val_err:
         return jsonify({'message': 'Validation failed', 'errors': str(val_err)}), 400
+=======
+    payload = request.get_json()
+    if not payload:
+        return jsonify({'message': 'Missing JSON request body'}), 400
+
+    data = register_schema.load(payload)
+>>>>>>> a80b1a3d68dacfb6d7bffdb23a71f44fe414e690
 
     if User.query.filter((User.email == data['email']) | (User.username == data['username'])).first():
         return jsonify({'message': 'User with this email or username already exists'}), 409
@@ -211,7 +265,11 @@ def register():
     try:
         db.session.add(new_user)
         db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'message': 'Error saving user to database', 'error': str(e)}), 500
 
+<<<<<<< HEAD
         try:
             msg = Message(
                 subject="Verify Your Account Registration",
@@ -232,10 +290,35 @@ def register():
     except Exception as e:
         db.session.rollback()
         return jsonify({'message': 'Error creating user', 'error': str(e)}), 500
+=======
+    email_sent = False
+    try:
+        msg = Message("Verify Your Account Registration", recipients=[new_user.email])
+        msg.body = f"Your account is being created. Use this code to complete your registration: {otp}"
+        mail.send(msg)
+        email_sent = True
+        print(f"SUCCESS: Email delivered to {new_user.email}")
+    except Exception as e:
+        print("\n" + "="*50)
+        print("--- RENDER MAIL DELIVERY FAILED (FALLBACK) ---")
+        print(f"User Email : {new_user.email}")
+        print(f"YOUR OTP   : {otp}")
+        print(f"SMTP Error : {e}")
+        print("="*50 + "\n")
+
+    return jsonify({
+        'message': 'User registered. Please check your email or server logs for the verification code.',
+        'email_sent': email_sent
+    }), 201
+>>>>>>> a80b1a3d68dacfb6d7bffdb23a71f44fe414e690
 
 @app.route('/api/auth/verify-registration', methods=['POST'])
 def verify_registration():
-    data = verify_registration_schema.load(request.get_json())
+    payload = request.get_json()
+    if not payload:
+        return jsonify({'message': 'Missing JSON request body'}), 400
+
+    data = verify_registration_schema.load(payload)
     email = data['email']
     otp_input = data['otp']
 
@@ -247,10 +330,21 @@ def verify_registration():
     if user.is_verified:
         return jsonify({'message': 'Account is already verified'}), 400
 
+<<<<<<< HEAD
     now = datetime.now(timezone.utc)
     user_otp_expiry = user.otp_expiry.replace(tzinfo=timezone.utc) if user.otp_expiry and user.otp_expiry.tzinfo is None else user.otp_expiry
 
     if user.otp != otp_input or (user_otp_expiry and user_otp_expiry < now):
+=======
+    now = datetime.datetime.now(datetime.timezone.utc)
+    
+    # Safe timezone conversion for DB datetimes
+    expiry = user.otp_expiry
+    if expiry and expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=datetime.timezone.utc)
+
+    if user.otp != otp_input or (expiry and expiry < now):
+>>>>>>> a80b1a3d68dacfb6d7bffdb23a71f44fe414e690
         return jsonify({'message': 'Incorrect or expired OTP code'}), 400
 
     user.is_verified = True
@@ -297,9 +391,18 @@ def login():
 
 @app.route('/api/auth/forgot-password', methods=['POST'])
 def forgot_password():
+<<<<<<< HEAD
     payload = request.get_json() or {}
     data = forgot_password_schema.load(payload)
     email = data.get('email', '').strip().lower()
+=======
+    payload = request.get_json()
+    if not payload:
+        return jsonify({'message': 'Missing JSON request body'}), 400
+
+    data = forgot_password_schema.load(payload)
+    email = data['email']
+>>>>>>> a80b1a3d68dacfb6d7bffdb23a71f44fe414e690
 
     user = User.query.filter_by(email=email).first()
     if not user:
@@ -313,28 +416,63 @@ def forgot_password():
     try:
         msg = Message(subject="Your Password Reset OTP", recipients=[email], body=f"Your OTP code is {otp}.")
         mail.send(msg)
+<<<<<<< HEAD
         return jsonify({"message": "OTP sent to your email successfully"}), 200
     except Exception as e:
         print(f"⚠️ SMTP Delivery Failed: {str(e)}", flush=True)
         print(f"🔑 LOCAL DEV FALLBACK OTP FOR {email}: {otp}", flush=True)
         return jsonify({"message": "OTP generated", "fallback_otp": otp}), 200
+=======
+        print(f"SUCCESS: Reset OTP delivered to {user.email}")
+    except Exception as e:
+        print("\n" + "="*50)
+        print("--- RENDER MAIL DELIVERY FAILED (FORGOT PASSWORD) ---")
+        print(f"User Email : {user.email}")
+        print(f"YOUR OTP   : {otp}")
+        print(f"SMTP Error : {e}")
+        print("="*50 + "\n")
+>>>>>>> a80b1a3d68dacfb6d7bffdb23a71f44fe414e690
 
 @app.route('/api/auth/reset-password', methods=['POST'])
 def reset_password():
+<<<<<<< HEAD
     payload = request.get_json() or {}
     data = reset_password_schema.load(payload)
     email = data.get('email', '').strip().lower()
     incoming_otp = str(data.get('otp', '')).strip()
     new_password = data.get('new_password', '').strip()
+=======
+    payload = request.get_json()
+    if not payload:
+        return jsonify({'message': 'Missing JSON request body'}), 400
+
+    data = reset_password_schema.load(payload)
+    email = data['email']
+    otp_input = data['otp']
+    new_password = data['new_password']
+>>>>>>> a80b1a3d68dacfb6d7bffdb23a71f44fe414e690
 
     user = User.query.filter_by(email=email).first()
     if not user or not user.reset_otp or str(user.reset_otp).strip() != incoming_otp:
         return jsonify({"message": "Incorrect or invalid OTP code"}), 400
 
+<<<<<<< HEAD
     if user.reset_otp_expiry:
         expiry = user.reset_otp_expiry.replace(tzinfo=timezone.utc) if user.reset_otp_expiry.tzinfo is None else user.reset_otp_expiry
         if datetime.now(timezone.utc) > expiry:
             return jsonify({"message": "OTP has expired."}), 400
+=======
+    if not user:
+        return jsonify({'message': 'Invalid details'}), 400
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    expiry = user.otp_expiry
+    if expiry and expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=datetime.timezone.utc)
+
+    if user.otp != otp_input or (expiry and expiry < now):
+        return jsonify({'message': 'Incorrect or expired OTP code'}), 400
+>>>>>>> a80b1a3d68dacfb6d7bffdb23a71f44fe414e690
 
     user.set_password(new_password)
     user.reset_otp = None
@@ -384,6 +522,10 @@ def get_dashboard_users(current_user):
             'has_prev': pagination.has_prev
         }
     }), 200
+<<<<<<< HEAD
+=======
+
+>>>>>>> a80b1a3d68dacfb6d7bffdb23a71f44fe414e690
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
