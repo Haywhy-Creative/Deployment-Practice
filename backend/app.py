@@ -4,30 +4,30 @@ import string
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 
-from dotenv import load_dotenv
-from flask import Flask, jsonify, request
+from flask import Flask, request, jsonify
+from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from flask_mail import Mail, Message
-from flask_sqlalchemy import SQLAlchemy
-from marshmallow import ValidationError
-import jwt
-from sqlalchemy import or_
+from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.exceptions import HTTPException
-from werkzeug.security import check_password_hash, generate_password_hash
-
-# Load environment variables FIRST before reading os.getenv
-load_dotenv()
+from marshmallow import ValidationError
+from sqlalchemy import or_
+import jwt
+from dotenv import load_dotenv
 
 from config import config_by_name
 from schemas import (
-    dashboard_query_schema,
-    forgot_password_schema,
-    login_schema,
     ma,
     register_schema,
-    reset_password_schema,
+    login_schema,
+    forgot_password_schema,
     verify_registration_schema,
+    reset_password_schema,
+    dashboard_query_schema
 )
+
+# Load environment variables
+load_dotenv()
 
 # Select environment configuration (defaults to development)
 env_name = os.getenv('FLASK_ENV', 'development')
@@ -37,30 +37,25 @@ app = Flask(__name__)
 app.config.from_object(config_cls)
 config_cls.init_app(app)
 
-# --- Database & Mail Configuration Overrides ---
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('SQLALCHEMY_DATABASE_URI') or os.getenv('DATABASE_URL')
+# Database Configuration Overrides
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('SQLALCHEMY_DATABASE_URI') or os.getenv('DATABASE_URL') or app.config.get('SQLALCHEMY_DATABASE_URI')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-app.config['MAIL_SERVER'] = os.getenv('MAIL_SERVER', 'smtp.gmail.com')
-app.config['MAIL_PORT'] = int(os.getenv('MAIL_PORT', 2525))
+# Mail Configuration Overrides
+app.config['MAIL_SERVER'] = os.getenv('MAIL_SERVER', app.config.get('MAIL_SERVER', 'smtp.gmail.com'))
+app.config['MAIL_PORT'] = int(os.getenv('MAIL_PORT', app.config.get('MAIL_PORT', 2525)))
 app.config['MAIL_USE_TLS'] = os.getenv('MAIL_USE_TLS', 'True').lower() in ['true', '1', 't']
 app.config['MAIL_USE_SSL'] = os.getenv('MAIL_USE_SSL', 'False').lower() in ['true', '1', 't']
 app.config['MAIL_USERNAME'] = os.getenv('MAIL_USERNAME')
 app.config['MAIL_PASSWORD'] = os.getenv('MAIL_PASSWORD')
-app.config['MAIL_DEFAULT_SENDER'] = os.getenv('MAIL_DEFAULT_SENDER') or os.getenv('MAIL_USERNAME')
+app.config['MAIL_DEFAULT_SENDER'] = (
+    os.getenv('MAIL_DEFAULT_SENDER') or os.getenv('MAIL_USERNAME')
+)
 
 # Initialize Extensions
 ma.init_app(app)
 mail = Mail(app)
 db = SQLAlchemy(app)
-
-# 🚨 DEBUG: Verify variables loaded on startup
-print("=" * 50)
-print("MAIL_USERNAME loaded:", app.config['MAIL_USERNAME'])
-print("MAIL_PASSWORD loaded:", "YES (Set)" if app.config['MAIL_PASSWORD'] else "NO (Missing/None)")
-print("MAIL_DEFAULT_SENDER:", app.config['MAIL_DEFAULT_SENDER'])
-print("DATABASE URI loaded:", "YES" if app.config['SQLALCHEMY_DATABASE_URI'] else "NO (Missing!)")
-print("=" * 50)
 
 # --- CORS Setup ---
 ALLOWED_ORIGINS = [
@@ -85,16 +80,24 @@ CORS(
     supports_credentials=True
 )
 
+# 🚨 DEBUG: Verify variables loaded on startup
+print("=" * 50)
+print("MAIL_USERNAME loaded:", app.config['MAIL_USERNAME'])
+print("MAIL_PASSWORD loaded:", "YES (Set)" if app.config['MAIL_PASSWORD'] else "NO (Missing/None)")
+print("MAIL_DEFAULT_SENDER:", app.config['MAIL_DEFAULT_SENDER'])
+print("DATABASE URI loaded:", "YES" if app.config['SQLALCHEMY_DATABASE_URI'] else "NO (Missing!)")
+print("=" * 50)
+
 
 # --- Database Model ---
 class User(db.Model):
     __tablename__ = 'users'
-
+    
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(256), nullable=False)
-
+    
     # Registration Verification Fields
     is_verified = db.Column(db.Boolean, default=False)
     otp = db.Column(db.String(6), nullable=True)
@@ -145,17 +148,17 @@ def handle_http_exception(e):
 def handle_unexpected_error(e):
     app.logger.error(f"Unhandled Exception: {str(e)}")
     origin = request.headers.get('Origin')
-
+    
     response = jsonify({
         'status': 'error',
         'message': 'An internal server error occurred.',
         'details': str(e)
     })
-
+    
     if origin in ALLOWED_ORIGINS:
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Credentials"] = "true"
-
+        
     return response, 500
 
 
@@ -178,7 +181,7 @@ def token_required(f):
             return jsonify({'message': 'Authorization token is missing!'}), 401
 
         try:
-            secret_key = app.config.get('JWT_SECRET_KEY', app.config.get('SECRET_KEY', 'default-secret-key'))
+            secret_key = app.config.get('JWT_SECRET_KEY', app.config['SECRET_KEY'])
             data = jwt.decode(token, secret_key, algorithms=["HS256"])
 
             if data.get('type') != 'access':
@@ -188,7 +191,7 @@ def token_required(f):
 
             if not current_user:
                 return jsonify({'message': 'User no longer exists.'}), 401
-
+                
             if not current_user.is_verified:
                 return jsonify({'message': 'Account email is unverified.'}), 403
 
@@ -217,10 +220,10 @@ def health_check():
 
 @app.route('/api/auth/register', methods=['POST'])
 def register():
-    print("\n" + "!" * 50, flush=True)
+    print("\n" + "!"*50, flush=True)
     print("➡️ REGISTER ROUTE HIT!", flush=True)
     print("Payload received:", request.get_json(), flush=True)
-    print("!" * 50 + "\n", flush=True)
+    print("!"*50 + "\n", flush=True)
 
     try:
         data = register_schema.load(request.get_json())
@@ -235,12 +238,12 @@ def register():
     otp = generate_otp()
     otp_expiry = datetime.now(timezone.utc) + timedelta(minutes=10)
 
-    print("\n" + "=" * 50, flush=True)
+    print("\n" + "="*50, flush=True)
     print(f"🔑 GENERATED OTP FOR {data['email']}: {otp}", flush=True)
-    print("=" * 50 + "\n", flush=True)
+    print("="*50 + "\n", flush=True)
 
     new_user = User(
-        username=data['username'],
+        username=data['username'], 
         email=data['email'],
         otp=otp,
         otp_expiry=otp_expiry,
@@ -267,11 +270,11 @@ def register():
             print("✅ Email sent successfully!", flush=True)
         except Exception as mail_err:
             import traceback
-            print("\n" + "❌" * 25, flush=True)
+            print("\n" + "❌"*25, flush=True)
             print(f"⚠️ SMTP MAIL ERROR: {str(mail_err)}", flush=True)
             print("FULL MAIL TRACEBACK:", flush=True)
             traceback.print_exc()
-            print("❌" * 25 + "\n", flush=True)
+            print("❌"*25 + "\n", flush=True)
 
         return jsonify({
             'message': 'Registration successful',
@@ -301,8 +304,7 @@ def verify_registration():
         return jsonify({'message': 'Account is already verified'}), 400
 
     now = datetime.now(timezone.utc)
-    user_otp_expiry = user.otp_expiry.replace(
-        tzinfo=timezone.utc) if user.otp_expiry and user.otp_expiry.tzinfo is None else user.otp_expiry
+    user_otp_expiry = user.otp_expiry.replace(tzinfo=timezone.utc) if user.otp_expiry and user.otp_expiry.tzinfo is None else user.otp_expiry
 
     if user.otp != otp_input or (user_otp_expiry and user_otp_expiry < now):
         return jsonify({'message': 'Incorrect or expired OTP code'}), 400
@@ -331,7 +333,7 @@ def login():
     if not user.is_verified:
         return jsonify({'message': 'Account unverified. Please verify your email first.'}), 403
 
-    secret_key = app.config.get('JWT_SECRET_KEY', app.config.get('SECRET_KEY', 'default-secret-key'))
+    secret_key = app.config.get('JWT_SECRET_KEY', app.config['SECRET_KEY'])
     access_expires = app.config.get('JWT_ACCESS_TOKEN_EXPIRES', timedelta(minutes=15))
     refresh_expires = app.config.get('JWT_REFRESH_TOKEN_EXPIRES', timedelta(days=7))
 
@@ -370,7 +372,7 @@ def forgot_password():
     email = data.get('email', '').strip().lower()
 
     user = User.query.filter_by(email=email).first()
-
+    
     if not user:
         return jsonify({"message": "If an account exists, an OTP has been sent."}), 200
 
@@ -393,7 +395,7 @@ def forgot_password():
     except Exception as e:
         print(f"⚠️ SMTP Delivery Failed: {str(e)}")
         print(f"🔑 LOCAL DEV FALLBACK OTP FOR {email}: {otp}")
-
+        
         return jsonify({
             "message": "OTP generated (check server terminal logs if email didn't arrive)",
             "fallback_otp": otp
@@ -404,7 +406,7 @@ def forgot_password():
 def reset_password():
     payload = request.get_json() or {}
     data = reset_password_schema.load(payload)
-
+    
     email = data.get('email', '').strip().lower()
     incoming_otp = str(data.get('otp', '')).strip()
     new_password = data.get('new_password', '').strip()
@@ -453,7 +455,7 @@ def get_current_user_profile(current_user):
 @token_required
 def get_dashboard_users(current_user):
     args = dashboard_query_schema.load(request.args)
-
+    
     page = args['page']
     per_page = args['per_page']
     search_query = args['search'].strip()
@@ -470,9 +472,9 @@ def get_dashboard_users(current_user):
         )
 
     if status_filter == 'verified':
-        query = query.filter(User.is_verified.is_(True))
+        query = query.filter(User.is_verified == True)
     elif status_filter == 'unverified':
-        query = query.filter(User.is_verified.is_(False))
+        query = query.filter(User.is_verified == False)
 
     query = query.order_by(User.id.desc())
     pagination = db.paginate(query, page=page, per_page=per_page, error_out=False)
