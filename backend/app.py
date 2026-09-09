@@ -118,14 +118,19 @@ class User(db.Model):
         return check_password_hash(self.password_hash, password)
 
 
-## Create tables automatically on startup with error catching
+# Automatic column patch for existing production tables
 with app.app_context():
     try:
         db.create_all()
-        print("✅ Database tables initialized successfully!")
+        # Explicitly add missing columns if table existed from an older model version
+        with db.engine.connect() as conn:
+            conn.execute(db.text("ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_otp VARCHAR(6);"))
+            conn.execute(db.text("ALTER TABLE users ADD COLUMN IF NOT EXISTS otp VARCHAR(6);"))
+            conn.execute(db.text("ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_expiry TIMESTAMP;"))
+            conn.commit()
+        print("✅ Database schema patched successfully!")
     except Exception as e:
-        print(f"⚠️ Error initializing database tables: {str(e)}")
-
+        print(f"⚠️ Database patch note: {str(e)}")
 def generate_otp():
     return ''.join(random.choices(string.digits, k=6))
 
