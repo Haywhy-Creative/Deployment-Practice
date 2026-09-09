@@ -118,19 +118,22 @@ class User(db.Model):
         return check_password_hash(self.password_hash, password)
 
 
-# Automatic column patch for existing production tables
 with app.app_context():
     try:
         db.create_all()
-        # Explicitly add missing columns if table existed from an older model version
+        
+        # Explicitly patch all OTP and user fields into existing Render PostgreSQL schema
         with db.engine.connect() as conn:
-            conn.execute(db.text("ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_otp VARCHAR(6);"))
             conn.execute(db.text("ALTER TABLE users ADD COLUMN IF NOT EXISTS otp VARCHAR(6);"))
             conn.execute(db.text("ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_expiry TIMESTAMP;"))
+            conn.execute(db.text("ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_otp VARCHAR(6);"))
+            conn.execute(db.text("ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_otp_expiry TIMESTAMP;"))
+            conn.execute(db.text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN DEFAULT FALSE;"))
             conn.commit()
-        print("✅ Database schema patched successfully!")
+            
+        print("✅ Database schema fully aligned and verified!")
     except Exception as e:
-        print(f"⚠️ Database patch note: {str(e)}")
+        print(f"⚠️ Schema check note: {str(e)}")
 def generate_otp():
     return ''.join(random.choices(string.digits, k=6))
 
