@@ -91,7 +91,6 @@ print("MAIL_DEFAULT_SENDER:", app.config['MAIL_DEFAULT_SENDER'])
 print("DATABASE URI loaded:", "YES" if app.config['SQLALCHEMY_DATABASE_URI'] else "NO (Missing!)")
 print("=" * 50)
 
-
 # --- Database Model ---
 class User(db.Model):
     __tablename__ = 'users'
@@ -116,38 +115,31 @@ class User(db.Model):
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
 
+
+# --- Database Initialization & Schema Auto-Patch ---
 with app.app_context():
     try:
         print(f"📡 Connecting to Database Engine: {db.engine.url.host} / DB: {db.engine.url.database}")
         
-        # 1. Standard SQLAlchemy Table Creation
+        # 1. Create missing tables based on model
         db.create_all()
         
-        # 2. Raw SQL fallback to force table creation if missing
+        # 2. Patch missing columns into existing production tables
         with db.engine.connect() as conn:
-            conn.execute(db.text("""
-                CREATE TABLE IF NOT EXISTS users (
-                    id SERIAL PRIMARY KEY,
-                    username VARCHAR(80) UNIQUE NOT NULL,
-                    email VARCHAR(120) UNIQUE NOT NULL,
-                    password_hash VARCHAR(255) NOT NULL,
-                    is_verified BOOLEAN DEFAULT FALSE,
-                    otp VARCHAR(6),
-                    otp_expiry TIMESTAMP,
-                    reset_otp VARCHAR(6),
-                    reset_otp_expiry TIMESTAMP,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-            """))
+            conn.execute(db.text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN DEFAULT FALSE;"))
+            conn.execute(db.text("ALTER TABLE users ADD COLUMN IF NOT EXISTS otp VARCHAR(6);"))
+            conn.execute(db.text("ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_expiry TIMESTAMP;"))
+            conn.execute(db.text("ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_otp VARCHAR(6);"))
+            conn.execute(db.text("ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_otp_expiry TIMESTAMP;"))
             conn.commit()
             
-        print("✅ USERS TABLE GUARANTEED & READY!")
+        print("✅ DATABASE SCHEMA FULLY PATCHED & READY!")
     except Exception as e:
         print(f"❌ DATABASE BOOTSTRAP FAILED: {str(e)}")
+
+
 def generate_otp():
     return ''.join(random.choices(string.digits, k=6))
-
-
 # =====================================================================
 # 🛡️ GLOBAL ERROR HANDLERS
 # =====================================================================
