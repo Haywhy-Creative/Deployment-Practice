@@ -36,11 +36,15 @@ config_cls = config_by_name.get(env_name, config_by_name['default'])
 app = Flask(__name__)
 app.config.from_object(config_cls)
 config_cls.init_app(app)
-
 # Database Configuration Overrides
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('SQLALCHEMY_DATABASE_URI') or os.getenv('DATABASE_URL') or app.config.get('SQLALCHEMY_DATABASE_URI')
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db_url = os.getenv('SQLALCHEMY_DATABASE_URI') or os.getenv('DATABASE_URL') or app.config.get('SQLALCHEMY_DATABASE_URI')
 
+# Render compatibility fix for SQLAlchemy 2.0+ (Converts postgres:// to postgresql://)
+if db_url and db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+app.config['SQLALCHEMY_DATABASE_URI'] = db_url
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 # Mail Configuration Overrides
 app.config['MAIL_SERVER'] = os.getenv('MAIL_SERVER', app.config.get('MAIL_SERVER', 'smtp.gmail.com'))
 app.config['MAIL_PORT'] = int(os.getenv('MAIL_PORT', app.config.get('MAIL_PORT', 2525)))
@@ -114,10 +118,13 @@ class User(db.Model):
         return check_password_hash(self.password_hash, password)
 
 
-# Create tables automatically on startup
+## Create tables automatically on startup with error catching
 with app.app_context():
-    db.create_all()
-
+    try:
+        db.create_all()
+        print("✅ Database tables initialized successfully!")
+    except Exception as e:
+        print(f"⚠️ Error initializing database tables: {str(e)}")
 
 def generate_otp():
     return ''.join(random.choices(string.digits, k=6))
