@@ -333,7 +333,6 @@ def verify_registration():
 
     return jsonify({'message': 'Email verified successfully! You can now login.'}), 200
 
-
 @app.route('/api/auth/login', methods=['POST'])
 def login():
     payload = request.get_json()
@@ -347,9 +346,28 @@ def login():
     if not user or not user.check_password(data['password']):
         return jsonify({'message': 'Invalid email or password'}), 401
 
+    # --- UNVERIFIED USER HANDLING ---
     if not user.is_verified:
-        return jsonify({'message': 'Account unverified. Please verify your email first.'}), 403
+        # 1. Generate new OTP and set expiration
+        new_otp = generate_otp()
+        user.otp = new_otp
+        user.otp_expiry = datetime.now(timezone.utc) + timedelta(minutes=10)
+        db.session.commit()
 
+        # 2. Print OTP prominently in Render Logs
+        print("\n" + "="*50)
+        print(f"🔑 LOGIN ATTEMPT - UNVERIFIED USER: {user.email}")
+        print(f"📩 YOUR NEW OTP IS: {new_otp}")
+        print("="*50 + "\n")
+
+        # 3. Return response for frontend to handle verification redirect
+        return jsonify({
+            'message': 'Account unverified. A new OTP has been generated.',
+            'requires_verification': True,
+            'email': user.email
+        }), 403
+
+    # --- VERIFIED USER LOGIN FLOW ---
     secret_key = app.config.get('JWT_SECRET_KEY', app.config['SECRET_KEY'])
     access_expires = app.config.get('JWT_ACCESS_TOKEN_EXPIRES', timedelta(minutes=15))
     refresh_expires = app.config.get('JWT_REFRESH_TOKEN_EXPIRES', timedelta(days=7))
@@ -385,11 +403,17 @@ def login():
 @app.route('/api/auth/forgot-password', methods=['POST'])
 def forgot_password():
     payload = request.get_json() or {}
-    data = forgot_password_schema.load(payload)
+
+    try:
+        data = forgot_password_schema.load(payload)
+    except Exception as err:
+        return jsonify({'message': 'Validation error', 'errors': getattr(err, 'messages', str(err))}), 400
+
     email = data.get('email', '').strip().lower()
 
     user = User.query.filter_by(email=email).first()
-    
+
+    # Security best practice: avoid leaking registered emails
     if not user:
         return jsonify({"message": "If an account exists, an OTP has been sent."}), 200
 
@@ -399,6 +423,12 @@ def forgot_password():
     user.reset_otp = otp
     user.reset_otp_expiry = expiry
     db.session.commit()
+
+    # Always log to Render terminal first
+    print("\n" + "="*50)
+    print(f"🔑 PASSWORD RESET REQUESTED FOR: {email}")
+    print(f"📩 YOUR RESET OTP IS: {otp}")
+    print("="*50 + "\n")
 
     try:
         msg = Message(
@@ -411,18 +441,19 @@ def forgot_password():
 
     except Exception as e:
         print(f"⚠️ SMTP Delivery Failed: {str(e)}")
-        print(f"🔑 LOCAL DEV FALLBACK OTP FOR {email}: {otp}")
-        
+
         return jsonify({
-            "message": "OTP generated (check server terminal logs if email didn't arrive)",
+            "message": "OTP generated successfully (check server terminal logs if email failed to arrive)",
             "fallback_otp": otp
         }), 200
-
-
 @app.route('/api/auth/reset-password', methods=['POST'])
 def reset_password():
     payload = request.get_json() or {}
-    data = reset_password_schema.load(payload)
+    
+    try:
+        data = reset_password_schema.load(payload)
+    except Exception as err:
+        return jsonify({'message': 'Validation error', 'errors': getattr(err, 'messages', str(err))}), 400
     
     email = data.get('email', '').strip().lower()
     incoming_otp = str(data.get('otp', '')).strip()
@@ -431,7 +462,7 @@ def reset_password():
     user = User.query.filter_by(email=email).first()
 
     if not user or not user.reset_otp:
-        return jsonify({"message": "Invalid request or token expired"}), 400
+        return jsonify({"message": "Invalid request or reset OTP expired"}), 400
 
     stored_otp = str(user.reset_otp).strip()
 
@@ -447,10 +478,15 @@ def reset_password():
         if current_time > expiry_time:
             return jsonify({"message": "OTP has expired. Please request a new one."}), 400
 
+    # Apply new password & clear reset fields
     user.set_password(new_password)
     user.reset_otp = None
     user.reset_otp_expiry = None
     db.session.commit()
+
+    print("\n" + "="*50)
+    print(f"🔒 PASSWORD RESET SUCCESSFUL FOR: {user.email}")
+    print("="*50 + "\n")
 
     return jsonify({"message": "Password reset successfully. You can now login."}), 200
 
