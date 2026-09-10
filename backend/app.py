@@ -239,19 +239,24 @@ def health_check():
 def register():
     print("\n" + "!"*50, flush=True)
     print("➡️ REGISTER ROUTE HIT!", flush=True)
-    print("Payload received:", request.get_json(), flush=True)
+    payload = request.get_json() or {}
+    print("Payload received:", payload, flush=True)
     print("!"*50 + "\n", flush=True)
 
+    # 1. Schema Validation
     try:
-        data = register_schema.load(request.get_json())
+        data = register_schema.load(payload)
     except Exception as val_err:
         print(f"❌ MARSHMALLOW VALIDATION ERROR: {val_err}", flush=True)
-        return jsonify({'message': 'Validation failed', 'errors': str(val_err)}), 400
+        return jsonify({'message': 'Validation failed', 'errors': getattr(val_err, 'messages', str(val_err))}), 400
 
-    if User.query.filter((User.email == data['email']) | (User.username == data['username'])).first():
+    # 2. Duplicate Check
+    existing_user = User.query.filter((User.email == data['email']) | (User.username == data['username'])).first()
+    if existing_user:
         print("⚠️ USER ALREADY EXISTS IN DATABASE", flush=True)
         return jsonify({'message': 'User with this email or username already exists'}), 409
 
+    # 3. Generate OTP
     otp = generate_otp()
     otp_expiry = datetime.now(timezone.utc) + timedelta(minutes=10)
 
@@ -259,6 +264,7 @@ def register():
     print(f"🔑 GENERATED OTP FOR {data['email']}: {otp}", flush=True)
     print("="*50 + "\n", flush=True)
 
+    # 4. Save User to Database
     new_user = User(
         username=data['username'], 
         email=data['email'],
@@ -272,38 +278,38 @@ def register():
         db.session.add(new_user)
         db.session.commit()
         print("✅ USER SAVED TO DATABASE", flush=True)
-
-        try:
-            msg = Message(
-                subject="Verify Your Account Registration",
-                sender=(
-                    "Authentication Service",
-                    app.config['MAIL_USERNAME'],
-                ),
-                recipients=[new_user.email],
-                body=f"Your verification code is: {otp}",
-            )
-            mail.send(msg)
-            print("✅ Email sent successfully!", flush=True)
-        except Exception as mail_err:
-            import traceback
-            print("\n" + "❌"*25, flush=True)
-            print(f"⚠️ SMTP MAIL ERROR: {str(mail_err)}", flush=True)
-            print("FULL MAIL TRACEBACK:", flush=True)
-            traceback.print_exc()
-            print("❌"*25 + "\n", flush=True)
-
-        return jsonify({
-            'message': 'Registration successful',
-            'otp': otp
-        }), 201
-
     except Exception as e:
         db.session.rollback()
         import traceback
-        print("❌ DATABASE / SERVER ERROR:", flush=True)
+        print("❌ DATABASE INSERT ERROR:", flush=True)
         traceback.print_exc()
-        return jsonify({'message': 'Error creating user', 'error': str(e)}), 500
+        return jsonify({'message': 'Error creating user in database', 'error': str(e)}), 500
+
+    # 5. Isolated Email Dispatch (Safe execution, won't rollback user or trigger 500 on failure)
+    try:
+        mail_username = app.config.get('MAIL_USERNAME', 'noreply@app.com')
+        msg = Message(
+            subject="Verify Your Account Registration",
+            sender=("Authentication Service", mail_username),
+            recipients=[new_user.email],
+            body=f"Your verification code is: {otp}"
+        )
+        mail.send(msg)
+        print("✅ Email sent successfully!", flush=True)
+    except Exception as mail_err:
+        import traceback
+        print("\n" + "❌"*25, flush=True)
+        print(f"⚠️ SMTP MAIL ERROR (USER WAS STILL SAVED): {str(mail_err)}", flush=True)
+        print("FULL MAIL TRACEBACK:", flush=True)
+        traceback.print_exc()
+        print("❌"*25 + "\n", flush=True)
+
+    # 6. Always return 201 Created on DB success
+    return jsonify({
+        'message': 'Registration successful',
+        'email': new_user.email,
+        'otp': otp
+    }), 201
 
 
 @app.route('/api/auth/verify-registration', methods=['POST'])
