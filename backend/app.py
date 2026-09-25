@@ -3,7 +3,9 @@ import random
 import string
 from datetime import datetime, timedelta, timezone
 from functools import wraps
-
+from flask_talisman import Talisman
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
@@ -83,6 +85,26 @@ CORS(
     supports_credentials=True
 )
 
+
+talisman = Talisman(
+    app,
+    force_https=False,  # Set to True in production if HTTPS is not handled by reverse proxy
+    session_cookie_secure=True,
+    session_cookie_http_only=True,
+    content_security_policy={
+        'default-src': '\'self\'',
+        'script-src': '\'self\'',
+    }
+)
+
+# --- 3. FLASK-LIMITER (Rate Limiting) ---
+# Protects endpoints against brute-force spam & DDoS attacks
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["200 per day", "50 per hour"],
+    storage_uri="memory://"  # Use Redis in high-scale production
+)
 # 🚨 DEBUG: Verify variables loaded on startup
 print("=" * 50)
 print("MAIL_USERNAME loaded:", app.config['MAIL_USERNAME'])
@@ -91,6 +113,16 @@ print("MAIL_DEFAULT_SENDER:", app.config['MAIL_DEFAULT_SENDER'])
 print("DATABASE URI loaded:", "YES" if app.config['SQLALCHEMY_DATABASE_URI'] else "NO (Missing!)")
 print("=" * 50)
 
+redis_client = None
+try:
+    import redis
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    redis_client = redis.Redis.from_url(redis_url, socket_timeout=2)
+    redis_client.ping()
+    print("✅ Connected to Redis cache successfully!", flush=True)
+except Exception as e:
+    redis_client = None
+    print(f"ℹ️ Local development: Using in-memory rate limiting / DB fallback. (Redis detail: {e})", flush=True)
 # --- Database Model ---
 class User(db.Model):
     __tablename__ = 'users'
@@ -178,7 +210,14 @@ def handle_unexpected_error(e):
         
     return response, 500
 
-
+@app.errorhandler(429)
+def ratelimit_handler(e):
+    response = jsonify({
+        'error': 'Too many requests',
+        'message': f'Rate limit exceeded: {e.description}'
+    })
+    response.status_code = 429
+    return response
 # =====================================================================
 # 🔐 JWT MIDDLEWARE DECORATOR
 # =====================================================================
@@ -236,6 +275,7 @@ def health_check():
 
 
 @app.route('/api/auth/register', methods=['POST'])
+@limiter.limit("5 per minute")
 def register():
     print("\n" + "!"*50, flush=True)
     print("➡️ REGISTER ROUTE HIT!", flush=True)
@@ -260,11 +300,20 @@ def register():
     otp = generate_otp()
     otp_expiry = datetime.now(timezone.utc) + timedelta(minutes=10)
 
+    # 🚨 ALWAYS PRINT OTP TO TERMINAL FOR EASY DEV ACCESS
     print("\n" + "="*50, flush=True)
     print(f"🔑 GENERATED OTP FOR {data['email']}: {otp}", flush=True)
     print("="*50 + "\n", flush=True)
 
-    # 4. Save User to Database
+    # 4. Store in Redis with 10-minute (600s) TTL (Fallback to DB if Redis is down)
+    if redis_client:
+        try:
+            redis_client.setex(f"otp:{data['email']}", 600, otp)
+            print(f"✅ OTP cached in Redis for {data['email']}", flush=True)
+        except Exception as cache_err:
+            print(f"⚠️ Redis write failed, falling back to database OTP storage: {cache_err}", flush=True)
+
+    # 5. Save User to Database
     new_user = User(
         username=data['username'], 
         email=data['email'],
@@ -285,34 +334,38 @@ def register():
         traceback.print_exc()
         return jsonify({'message': 'Error creating user in database', 'error': str(e)}), 500
 
-    # 5. Isolated Email Dispatch (Safe execution, won't rollback user or trigger 500 on failure)
-    try:
-        mail_username = app.config.get('MAIL_USERNAME', 'noreply@app.com')
-        msg = Message(
-            subject="Verify Your Account Registration",
-            sender=("Authentication Service", mail_username),
-            recipients=[new_user.email],
-            body=f"Your verification code is: {otp}"
-        )
-        mail.send(msg)
-        print("✅ Email sent successfully!", flush=True)
-    except Exception as mail_err:
-        import traceback
-        print("\n" + "❌"*25, flush=True)
-        print(f"⚠️ SMTP MAIL ERROR (USER WAS STILL SAVED): {str(mail_err)}", flush=True)
-        print("FULL MAIL TRACEBACK:", flush=True)
-        traceback.print_exc()
-        print("❌"*25 + "\n", flush=True)
+    # 6. Safe Email Dispatch (Skips slow SMTP in local development if disabled)
+    skip_email = os.getenv("SKIP_EMAIL_SENDING", "true").lower() == "true"
+    
+    if not skip_email:
+        try:
+            mail_username = app.config.get('MAIL_USERNAME', 'noreply@app.com')
+            msg = Message(
+                subject="Verify Your Account Registration",
+                sender=("Authentication Service", mail_username),
+                recipients=[new_user.email],
+                body=f"Your verification code is: {otp}"
+            )
+            mail.send(msg)
+            print("✅ Email sent successfully!", flush=True)
+        except Exception as mail_err:
+            import traceback
+            print("\n" + "❌"*25, flush=True)
+            print(f"⚠️ SMTP MAIL ERROR (USER SAVED): {str(mail_err)}", flush=True)
+            traceback.print_exc()
+            print("❌"*25 + "\n", flush=True)
+    else:
+        print("ℹ️ Skipping SMTP email sending in local dev environment.", flush=True)
 
-    # 6. Always return 201 Created on DB success
+    # 7. Return 201 Created
     return jsonify({
         'message': 'Registration successful',
         'email': new_user.email,
-        'otp': otp
+        'otp': otp  # Sent back in response payload for frontend auto-fill during dev
     }), 201
 
-
 @app.route('/api/auth/verify-registration', methods=['POST'])
+@limiter.limit("7 per minute")
 def verify_registration():
     data = verify_registration_schema.load(request.get_json())
     email = data['email']
@@ -340,6 +393,7 @@ def verify_registration():
     return jsonify({'message': 'Email verified successfully! You can now login.'}), 200
 
 @app.route('/api/auth/login', methods=['POST'])
+@limiter.limit("10 per minute")
 def login():
     payload = request.get_json()
     if not payload:
@@ -407,6 +461,7 @@ def login():
 
 
 @app.route('/api/auth/forgot-password', methods=['POST'])
+@limiter.limit("3 per minute")
 def forgot_password():
     payload = request.get_json() or {}
 
@@ -453,6 +508,7 @@ def forgot_password():
             "fallback_otp": otp
         }), 200
 @app.route('/api/auth/reset-password', methods=['POST'])
+@limiter.limit("5 per minute")
 def reset_password():
     payload = request.get_json() or {}
     
